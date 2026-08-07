@@ -8,6 +8,7 @@ import type {
   ComputerUseSessionStatus,
   ComputerUseSessionSummary,
   ComputerUseStartRequest,
+  WolTarget,
 } from '@/types/generated'
 import { useHidWebSocket, type HidKeyboardEvent, type HidMouseEvent } from '@/composables/useHidWebSocket'
 import type { StreamSignalReason, StreamState } from '@/types/websocket'
@@ -560,6 +561,9 @@ export const atxApi = {
       led_supported: boolean
       hdd_status: 'active' | 'inactive' | 'unknown'
       hdd_supported: boolean
+      wol_enabled: boolean
+      wol_targets: WolTarget[]
+      power_controls_available: boolean
     }>('/atx/status'),
 
   power: (action: 'short' | 'long' | 'reset') =>

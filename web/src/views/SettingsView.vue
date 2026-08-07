@@ -46,6 +46,7 @@ import type {
   AtxDriverType,
   ActiveLevel,
   AtxDevices,
+  WolTarget,
   OtgHidProfile,
   OtgHidFunctions,
   Ch9329DescriptorConfig,
@@ -1191,6 +1192,7 @@ const atxConfig = ref({
     pin: 0,
     active_level: 'high' as ActiveLevel,
   },
+  wol_enabled: false,
   wol_interface: '',
 })
 
@@ -1198,6 +1200,31 @@ const atxSaving = ref(false)
 const atxSaved = ref(false)
 const wolSaving = ref(false)
 const wolSaved = ref(false)
+
+/** Fixed-length editor rows so all WOL target slots are always visible. */
+const WOL_TARGET_SLOTS = 5
+const wolTargets = ref<WolTarget[]>(
+  Array.from({ length: WOL_TARGET_SLOTS }, () => ({ name: '', mac: '' })),
+)
+
+function setWolTargets(targets: WolTarget[]) {
+  wolTargets.value = Array.from({ length: WOL_TARGET_SLOTS }, (_, index) => ({
+    name: targets[index]?.name ?? '',
+    mac: targets[index]?.mac ?? '',
+  }))
+}
+
+const macPattern = /^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$|^[0-9A-Fa-f]{12}$/
+
+/** Rows with a MAC that is present but malformed — blank rows are simply ignored. */
+const invalidWolTargets = computed(() =>
+  wolTargets.value.map(target => {
+    const mac = target.mac.trim()
+    return mac.length > 0 && !macPattern.test(mac)
+  }),
+)
+
+const hasInvalidWolTarget = computed(() => invalidWolTargets.value.some(Boolean))
 
 const atxDevices = ref<AtxDevices>({
   gpio_chips: [],
@@ -1800,8 +1827,10 @@ async function loadAtxConfig() {
         ...config.hdd,
         active_level: config.hdd.active_level || 'high',
       },
+      wol_enabled: config.wol_enabled ?? false,
       wol_interface: config.wol_interface || '',
     }
+    setWolTargets(config.wol_targets ?? [])
     clearAtxSerialDeviceConflicts()
     normalizeAtxRelayChannels()
   } catch {
@@ -1862,12 +1891,20 @@ async function saveAtxSettings() {
 }
 
 async function saveWolSettings() {
+  if (hasInvalidWolTarget.value) return
+
   wolSaving.value = true
   wolSaved.value = false
   try {
-    await configStore.updateAtx({
+    const response = await configStore.updateAtx({
+      wol_enabled: atxConfig.value.wol_enabled,
       wol_interface: atxConfig.value.wol_interface || undefined,
+      wol_targets: wolTargets.value
+        .filter(target => target.mac.trim().length > 0)
+        .map(target => ({ name: target.name.trim(), mac: target.mac.trim() })),
     })
+    // The backend canonicalizes MAC notation and drops blanks; mirror the result.
+    setWolTargets(response.wol_targets ?? [])
     wolSaved.value = true
     setTimeout(() => (wolSaved.value = false), 2000)
   } catch {
@@ -4273,17 +4310,60 @@ watch(isWindows, () => {
                 <CardDescription>{{ t('settings.atxWolSettingsDesc') }}</CardDescription>
               </CardHeader>
               <CardContent class="space-y-4">
-                <div class="space-y-2">
-                  <Label for="wol-interface">{{ t('settings.atxWolInterface') }}</Label>
-                  <Input
-                    id="wol-interface"
-                    v-model="atxConfig.wol_interface"
-                    :placeholder="t('settings.atxWolInterfacePlaceholder')"
-                  />
+                <div class="flex items-start justify-between gap-4">
+                  <div class="space-y-1">
+                    <Label for="wol-enabled">{{ t('settings.atxWolEnabled') }}</Label>
+                    <p class="text-sm text-muted-foreground">{{ t('settings.atxWolEnabledDesc') }}</p>
+                  </div>
+                  <Switch id="wol-enabled" v-model="atxConfig.wol_enabled" />
                 </div>
+
+                <template v-if="atxConfig.wol_enabled">
+                  <Separator />
+
+                  <div class="space-y-2">
+                    <Label for="wol-interface">{{ t('settings.atxWolInterface') }}</Label>
+                    <Input
+                      id="wol-interface"
+                      v-model="atxConfig.wol_interface"
+                      :placeholder="t('settings.atxWolInterfacePlaceholder')"
+                    />
+                  </div>
+
+                  <Separator />
+
+                  <div class="space-y-3">
+                    <div class="space-y-1">
+                      <Label>{{ t('settings.atxWolTargets') }}</Label>
+                      <p class="text-sm text-muted-foreground">{{ t('settings.atxWolTargetsDesc') }}</p>
+                    </div>
+                    <div
+                      v-for="(target, index) in wolTargets"
+                      :key="index"
+                      class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]"
+                    >
+                      <Input
+                        v-model="target.name"
+                        maxlength="32"
+                        :placeholder="t('settings.atxWolTargetNamePlaceholder', { index: index + 1 })"
+                      />
+                      <div class="space-y-1">
+                        <Input
+                          v-model="target.mac"
+                          class="font-mono"
+                          placeholder="AA:BB:CC:DD:EE:FF"
+                          :aria-invalid="invalidWolTargets[index]"
+                        />
+                        <p v-if="invalidWolTargets[index]" class="text-xs text-destructive">
+                          {{ t('atx.invalidMac') }}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </template>
               </CardContent>
               <CardFooter class="border-t pt-4 justify-end">
-                <Button :disabled="wolSaving" @click="saveWolSettings">
+                <Button :disabled="wolSaving || hasInvalidWolTarget" @click="saveWolSettings">
                   <Loader2 v-if="wolSaving" class="size-4 mr-2 animate-spin" /><Check v-else-if="wolSaved" class="size-4 mr-2" /><Save v-else class="size-4 mr-2" />{{ wolSaving ? t('actionbar.applying') : wolSaved ? t('common.success') : t('common.save') }}
                 </Button>
               </CardFooter>

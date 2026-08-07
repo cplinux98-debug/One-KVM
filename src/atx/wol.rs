@@ -17,6 +17,12 @@ fn parse_mac_address(mac: &str) -> Result<[u8; 6]> {
         mac.split(':').collect()
     } else if mac.contains('-') {
         mac.split('-').collect()
+    } else if mac.len() == 12 && mac.chars().all(|c| c.is_ascii_hexdigit()) {
+        // Separator-less form, e.g. "AABBCCDDEEFF"
+        mac.as_bytes()
+            .chunks(2)
+            .map(|chunk| std::str::from_utf8(chunk).unwrap_or(""))
+            .collect()
     } else {
         return Err(AppError::Config(format!(
             "Invalid MAC address format: {}",
@@ -38,6 +44,18 @@ fn parse_mac_address(mac: &str) -> Result<[u8; 6]> {
     }
 
     Ok(bytes)
+}
+
+/// Validate a MAC address and return it in canonical `AA:BB:CC:DD:EE:FF` form.
+///
+/// Accepts colon-, dash- and separator-less notation in either case.
+pub fn normalize_mac_address(mac_address: &str) -> Result<String> {
+    let mac = parse_mac_address(mac_address)?;
+    Ok(mac
+        .iter()
+        .map(|byte| format!("{:02X}", byte))
+        .collect::<Vec<_>>()
+        .join(":"))
 }
 
 fn build_magic_packet(mac: &[u8; 6]) -> [u8; MAGIC_PACKET_SIZE] {
@@ -184,10 +202,30 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_mac_address_bare() {
+        let mac = parse_mac_address("aabbccddeeff").unwrap();
+        assert_eq!(mac, [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
+    }
+
+    #[test]
     fn test_parse_mac_address_invalid() {
         assert!(parse_mac_address("invalid").is_err());
         assert!(parse_mac_address("AA:BB:CC:DD:EE").is_err());
         assert!(parse_mac_address("AA:BB:CC:DD:EE:GG").is_err());
+        assert!(parse_mac_address("AABBCCDDEEFG").is_err());
+    }
+
+    #[test]
+    fn test_normalize_mac_address() {
+        assert_eq!(
+            normalize_mac_address(" aa-bb-cc-dd-ee-ff ").unwrap(),
+            "AA:BB:CC:DD:EE:FF"
+        );
+        assert_eq!(
+            normalize_mac_address("aabbccddeeff").unwrap(),
+            "AA:BB:CC:DD:EE:FF"
+        );
+        assert!(normalize_mac_address("nope").is_err());
     }
 
     #[test]

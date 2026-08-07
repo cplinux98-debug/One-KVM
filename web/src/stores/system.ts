@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { systemApi, streamApi, hidApi, atxApi, msdApi, type DeviceInfo, type DiskMode, type MountedMedia, type PlatformCapabilities } from '@/api'
+import type { WolTarget } from '@/types/generated'
 
 interface SystemCapabilities {
   video: { available: boolean; backend?: string; reason?: string }
@@ -51,6 +52,11 @@ interface AtxState {
   initialized: boolean
   powerOn: boolean
   hddStatus: 'active' | 'inactive' | 'unknown'
+  /** Wake-on-LAN is enabled independently of ATX hardware control */
+  wolEnabled: boolean
+  wolTargets: WolTarget[]
+  /** ATX or WOL is enabled, so the console should offer a power button */
+  powerControlsAvailable: boolean
   error: string | null
 }
 
@@ -135,6 +141,9 @@ export interface AtxDeviceInfo {
   power_on: boolean
   hdd_status: 'active' | 'inactive' | 'unknown'
   error: string | null
+  wol_enabled: boolean
+  wol_targets: WolTarget[]
+  power_controls_available: boolean
 }
 
 export interface AudioDeviceInfo {
@@ -247,6 +256,9 @@ export const useSystemStore = defineStore('system', () => {
         initialized: state.initialized,
         powerOn: state.power_status === 'on',
         hddStatus: state.hdd_status,
+        wolEnabled: state.wol_enabled,
+        wolTargets: state.wol_targets ?? [],
+        powerControlsAvailable: state.power_controls_available ?? state.available,
         error: null,
       }
       return state
@@ -393,6 +405,9 @@ export const useSystemStore = defineStore('system', () => {
         initialized: data.atx.initialized,
         powerOn: data.atx.power_on,
         hddStatus: data.atx.hdd_status,
+        wolEnabled: data.atx.wol_enabled ?? false,
+        wolTargets: data.atx.wol_targets ?? [],
+        powerControlsAvailable: data.atx.power_controls_available ?? data.atx.available,
         error: data.atx.error,
       }
     } else {

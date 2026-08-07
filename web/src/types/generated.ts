@@ -116,6 +116,16 @@ export interface AtxInputBinding {
 	active_level: ActiveLevel;
 }
 
+/**
+ * A named Wake-on-LAN target configured in settings.
+ *
+ * Console clients pick a target from this list instead of typing a MAC address.
+ */
+export interface WolTarget {
+	name: string;
+	mac: string;
+}
+
 export interface AtxConfig {
 	enabled: boolean;
 	driver: AtxDriverType;
@@ -125,7 +135,11 @@ export interface AtxConfig {
 	reset: AtxOutputBinding;
 	led: AtxInputBinding;
 	hdd: AtxInputBinding;
+	/** Whether Wake-on-LAN is offered to console clients */
+	wol_enabled: boolean;
 	wol_interface: string;
+	/** Named Wake-on-LAN targets, at most `WOL_TARGET_MAX_COUNT` entries */
+	wol_targets: WolTarget[];
 }
 
 export interface AudioConfig {
@@ -348,8 +362,12 @@ export interface AtxConfigUpdate {
 	led?: AtxInputBindingUpdate;
 	/** HDD activity sensing configuration */
 	hdd?: AtxInputBindingUpdate;
+	/** Whether Wake-on-LAN is offered to console clients */
+	wol_enabled?: boolean;
 	/** Network interface for WOL packets (empty = auto) */
 	wol_interface?: string;
+	/** Full replacement list of named WOL targets (max 5 entries) */
+	wol_targets?: WolTarget[];
 }
 
 export interface AtxDevices {

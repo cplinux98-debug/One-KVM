@@ -3,12 +3,10 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Power, RotateCcw, CircleDot, Wifi, Send, HardDrive } from 'lucide-vue-next'
+import { Power, RotateCcw, CircleDot, Wifi, Send, HardDrive, Check } from 'lucide-vue-next'
 import { atxApi } from '@/api'
-import { atxConfigApi } from '@/api/config'
+import type { WolTarget } from '@/types/generated'
 
 type AtxAction = 'short' | 'long' | 'reset'
 
@@ -18,6 +16,19 @@ const actionDurations: Record<AtxAction, number> = {
   long: 5000,
   reset: 500,
 }
+
+const props = withDefaults(defineProps<{
+  /** ATX hardware power control is configured and enabled */
+  atxAvailable?: boolean
+  /** Wake-on-LAN is enabled in settings */
+  wolEnabled?: boolean
+  /** Named WOL targets saved in settings */
+  wolTargets?: WolTarget[]
+}>(), {
+  atxAvailable: false,
+  wolEnabled: false,
+  wolTargets: () => [],
+})
 
 const emit = defineEmits<{
   (e: 'close'): void
@@ -29,7 +40,10 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-const activeTab = ref('atx')
+// With only one feature enabled the tab strip is noise, so it is hidden and the
+// remaining panel is shown on its own.
+const showTabs = computed(() => props.atxAvailable && props.wolEnabled)
+const activeTab = ref(props.atxAvailable ? 'atx' : 'wol')
 const tabTriggerClass = 'h-8 rounded-md border-0 bg-transparent text-center text-xs text-muted-foreground shadow-none hover:text-foreground data-[state=active]:border-0 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm'
 
 const powerState = ref<'on' | 'off' | 'unknown'>('unknown')
@@ -37,10 +51,8 @@ const hddState = ref<'active' | 'inactive' | 'unknown'>('unknown')
 let powerStateTimer: number | null = null
 let actionTimer: number | null = null
 
-const wolMacAddress = ref('')
-const wolHistory = ref<string[]>([])
+const selectedMac = ref('')
 const wolSending = ref(false)
-const wolLoadingHistory = ref(false)
 const activeAction = ref<AtxAction | null>(null)
 
 const actionBusy = computed(() => activeAction.value !== null)
@@ -111,52 +123,19 @@ function handleAction(action: AtxAction) {
   }, Math.max(actionDurations[action], minActionFeedbackMs))
 }
 
-const isValidMac = computed(() => {
-  const mac = wolMacAddress.value.trim()
-  const macRegex = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$|^([0-9A-Fa-f]{12})$/
-  return macRegex.test(mac)
-})
-
 function sendWol() {
-  if (!isValidMac.value) return
+  if (!selectedMac.value || wolSending.value) return
   wolSending.value = true
 
-  let mac = wolMacAddress.value.trim().toUpperCase()
-  if (mac.length === 12) {
-    mac = mac.match(/.{2}/g)!.join(':')
-  } else {
-    mac = mac.replace(/-/g, ':')
-  }
-
-  emit('wol', mac)
-
-  wolHistory.value = [mac, ...wolHistory.value.filter(item => item !== mac)].slice(0, 5)
-  setTimeout(() => {
-    loadWolHistory().catch(() => {})
-  }, 1200)
+  emit('wol', selectedMac.value)
 
   setTimeout(() => {
     wolSending.value = false
   }, 1000)
 }
 
-function selectFromHistory(mac: string) {
-  wolMacAddress.value = mac
-}
-
-async function loadWolHistory() {
-  wolLoadingHistory.value = true
-  try {
-    const response = await atxConfigApi.getWolHistory(5)
-    wolHistory.value = response.history.map(item => item.mac_address)
-  } catch {
-    wolHistory.value = []
-  } finally {
-    wolLoadingHistory.value = false
-  }
-}
-
 async function refreshPowerState() {
+  if (!props.atxAvailable) return
   try {
     const state = await atxApi.status()
     powerState.value = state.power_status
@@ -168,6 +147,7 @@ async function refreshPowerState() {
 }
 
 onMounted(() => {
+  if (!props.atxAvailable) return
   refreshPowerState().catch(() => {})
   powerStateTimer = window.setInterval(() => {
     refreshPowerState().catch(() => {})
@@ -185,21 +165,35 @@ onUnmounted(() => {
   }
 })
 
+// Fall back to whichever panel is still enabled if settings change while open.
 watch(
-  () => activeTab.value,
-  (tab) => {
-    if (tab === 'wol') {
-      loadWolHistory().catch(() => {})
-    }
+  () => [props.atxAvailable, props.wolEnabled] as const,
+  ([atxAvailable, wolEnabled]) => {
+    if (!atxAvailable && activeTab.value === 'atx' && wolEnabled) activeTab.value = 'wol'
+    if (!wolEnabled && activeTab.value === 'wol' && atxAvailable) activeTab.value = 'atx'
   },
   { immediate: true },
+)
+
+// Keep a valid selection whenever the saved target list changes.
+watch(
+  () => props.wolTargets,
+  (targets) => {
+    if (!targets.some(target => target.mac === selectedMac.value)) {
+      selectedMac.value = targets[0]?.mac ?? ''
+    }
+  },
+  { immediate: true, deep: true },
 )
 </script>
 
 <template>
   <div class="p-2.5 space-y-2.5">
     <Tabs v-model="activeTab">
-      <TabsList class="grid h-auto w-full grid-cols-2 gap-1 rounded-md border border-border bg-muted p-0.5">
+      <TabsList
+        v-if="showTabs"
+        class="grid h-auto w-full grid-cols-2 gap-1 rounded-md border border-border bg-muted p-0.5"
+      >
         <TabsTrigger
           value="atx"
           :class="tabTriggerClass"
@@ -217,7 +211,7 @@ watch(
       </TabsList>
 
       <!-- ATX Tab -->
-      <TabsContent value="atx" class="mt-2.5 space-y-2.5">
+      <TabsContent v-if="atxAvailable" value="atx" :class="showTabs ? 'mt-2.5 space-y-2.5' : 'mt-0 space-y-2.5'">
         <!-- Status -->
         <div class="grid grid-cols-2 gap-2">
           <div class="flex min-w-0 items-center gap-2 rounded-md border bg-muted/40 px-2 py-1.5">
@@ -285,52 +279,51 @@ watch(
       </TabsContent>
 
       <!-- WOL Tab -->
-      <TabsContent value="wol" class="mt-2.5 space-y-2.5">
-        <div class="space-y-2">
-          <Label for="mac-address" class="text-xs">{{ t('atx.macAddress') }}</Label>
-          <div class="flex gap-2">
-            <Input
-              id="mac-address"
-              v-model="wolMacAddress"
-              placeholder="AA:BB:CC:DD:EE:FF"
-              class="h-8 text-xs font-mono"
-              @keyup.enter="sendWol"
-            />
-            <Button
-              size="sm"
-              class="h-8 px-3"
-              :disabled="!isValidMac || wolSending"
-              @click="sendWol"
-            >
-              <Send class="size-3.5" />
-            </Button>
-          </div>
-          <p v-if="wolMacAddress && !isValidMac" class="text-xs text-destructive">
-            {{ t('atx.invalidMac') }}
-          </p>
-        </div>
-
-        <p v-if="wolLoadingHistory" class="text-xs text-muted-foreground">
-          {{ t('common.loading') }}
+      <TabsContent v-if="wolEnabled" value="wol" :class="showTabs ? 'mt-2.5 space-y-2.5' : 'mt-0 space-y-2.5'">
+        <p v-if="!showTabs" class="flex items-center gap-1.5 text-xs font-medium">
+          <Wifi class="size-3.5" />
+          {{ t('atx.wol') }}
         </p>
 
-        <!-- History -->
-        <div v-if="wolHistory.length > 0" class="space-y-2">
-          <Separator />
-          <Label class="text-xs text-muted-foreground">{{ t('atx.recentMac') }}</Label>
+        <template v-if="wolTargets.length > 0">
           <div class="space-y-1">
             <Button
-              v-for="mac in wolHistory"
-              :key="mac"
-              variant="ghost"
+              v-for="target in wolTargets"
+              :key="target.mac"
+              variant="outline"
               size="sm"
-              class="w-full justify-start font-mono text-xs"
-              @click="selectFromHistory(mac)"
+              :class="[
+                'h-auto w-full justify-start gap-2 px-2 py-1.5 text-left',
+                target.mac === selectedMac ? 'border-primary bg-primary/5' : '',
+              ]"
+              @click="selectedMac = target.mac"
             >
-              {{ mac }}
+              <Check :class="['size-3.5 shrink-0', target.mac === selectedMac ? 'opacity-100' : 'opacity-0']" />
+              <span class="min-w-0 flex-1">
+                <span class="block truncate text-xs font-medium leading-none">
+                  {{ target.name || t('atx.wolUnnamedTarget') }}
+                </span>
+                <span class="mt-1 block truncate font-mono text-[11px] leading-none text-muted-foreground">
+                  {{ target.mac }}
+                </span>
+              </span>
             </Button>
           </div>
-        </div>
+
+          <Button
+            size="sm"
+            class="h-8 w-full gap-2 text-xs"
+            :disabled="!selectedMac || wolSending"
+            @click="sendWol"
+          >
+            <Send class="size-3.5" />
+            {{ wolSending ? t('atx.wolSending') : t('atx.wolSend') }}
+          </Button>
+        </template>
+
+        <p v-else class="rounded-md border border-dashed px-2 py-3 text-center text-xs text-muted-foreground">
+          {{ t('atx.wolNoTargets') }}
+        </p>
       </TabsContent>
     </Tabs>
   </div>

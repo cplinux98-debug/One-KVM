@@ -68,6 +68,12 @@ pub struct AtxDeviceInfo {
     pub power_on: bool,
     pub hdd_status: String,
     pub error: Option<String>,
+    /// Wake-on-LAN is enabled independently of ATX hardware control
+    pub wol_enabled: bool,
+    /// Named WOL targets, empty when WOL is disabled
+    pub wol_targets: Vec<crate::config::WolTarget>,
+    /// True when ATX or WOL is enabled, i.e. the console should show a power button
+    pub power_controls_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

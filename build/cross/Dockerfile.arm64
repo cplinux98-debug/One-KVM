@@ -22,6 +22,8 @@ ARG FFMPEG_ROCKCHIP_REV=40c412daccf08164493da0de990eb99a8948116b
 # Optionally use China mirrors for builds in China.
 RUN if [ "$CHINAMIRRO" = "1" ]; then \
         sed -i -E \
+            -e 's|http://deb.debian.org/debian-security|http://mirrors.tuna.tsinghua.edu.cn/debian-security|g' \
+            -e 's|http://security.debian.org/debian-security|http://mirrors.tuna.tsinghua.edu.cn/debian-security|g' \
             -e 's|http://deb.debian.org/debian([[:space:]])|http://mirrors.tuna.tsinghua.edu.cn/debian\1|g' \
             /etc/apt/sources.list; \
     fi

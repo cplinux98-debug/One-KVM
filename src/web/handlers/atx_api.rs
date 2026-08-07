@@ -1,11 +1,15 @@
 use super::*;
 
 use crate::atx::{AtxDriverType, AtxState, HddStatus, PowerStatus};
+use crate::config::WolTarget;
 
 const WOL_HISTORY_DEFAULT_LIMIT: usize = 5;
 const WOL_HISTORY_MAX_LIMIT: usize = 50;
 
 /// ATX state response
+///
+/// Carries the WOL configuration alongside the ATX hardware state so the console
+/// can decide which power controls to offer from a single poll.
 #[derive(Serialize)]
 pub struct AtxStateResponse {
     pub available: bool,
@@ -15,6 +19,10 @@ pub struct AtxStateResponse {
     pub led_supported: bool,
     pub hdd_status: String,
     pub hdd_supported: bool,
+    pub wol_enabled: bool,
+    pub wol_targets: Vec<WolTarget>,
+    /// True when ATX or WOL is enabled, i.e. the console should show a power button
+    pub power_controls_available: bool,
 }
 
 impl From<AtxState> for AtxStateResponse {
@@ -41,6 +49,26 @@ impl From<AtxState> for AtxStateResponse {
                 HddStatus::Unknown => "unknown".to_string(),
             },
             hdd_supported: state.hdd_supported,
+            wol_enabled: false,
+            wol_targets: Vec::new(),
+            power_controls_available: state.available,
+        }
+    }
+}
+
+impl Default for AtxStateResponse {
+    fn default() -> Self {
+        Self {
+            available: false,
+            backend: "none".to_string(),
+            initialized: false,
+            power_status: "unknown".to_string(),
+            led_supported: false,
+            hdd_status: "unknown".to_string(),
+            hdd_supported: false,
+            wol_enabled: false,
+            wol_targets: Vec::new(),
+            power_controls_available: false,
         }
     }
 }
@@ -49,21 +77,21 @@ impl From<AtxState> for AtxStateResponse {
 pub async fn atx_status(State(state): State<Arc<AppState>>) -> Result<Json<AtxStateResponse>> {
     let atx_guard = state.atx.read().await;
 
-    match atx_guard.as_ref() {
-        Some(atx) => {
-            let atx_state = atx.state().await;
-            Ok(Json(AtxStateResponse::from(atx_state)))
-        }
-        None => Ok(Json(AtxStateResponse {
-            available: false,
-            backend: "none".to_string(),
-            initialized: false,
-            power_status: "unknown".to_string(),
-            led_supported: false,
-            hdd_status: "unknown".to_string(),
-            hdd_supported: false,
-        })),
+    let mut response = match atx_guard.as_ref() {
+        Some(atx) => AtxStateResponse::from(atx.state().await),
+        None => AtxStateResponse::default(),
+    };
+
+    let config = state.config.get();
+    response.wol_enabled = config.atx.wol_enabled;
+    if config.atx.wol_enabled {
+        response.wol_targets = config.atx.wol_targets.clone();
     }
+    // ATX may be unavailable at runtime (e.g. device missing) even when configured,
+    // so OR the live availability with the configured WOL switch.
+    response.power_controls_available = response.available || config.atx.power_controls_available();
+
+    Ok(Json(response))
 }
 
 /// ATX power control request
@@ -135,33 +163,23 @@ pub struct WolHistoryResponse {
     pub history: Vec<WolHistoryEntry>,
 }
 
-fn normalize_wol_mac_address(mac_address: &str) -> String {
-    let normalized = mac_address.trim().to_uppercase().replace('-', ":");
-
-    if normalized.len() == 12 && normalized.chars().all(|c| c.is_ascii_hexdigit()) {
-        let mut mac_with_separator = String::with_capacity(17);
-        for (index, chunk) in normalized.as_bytes().chunks(2).enumerate() {
-            if index > 0 {
-                mac_with_separator.push(':');
-            }
-            mac_with_separator.push(chunk[0] as char);
-            mac_with_separator.push(chunk[1] as char);
-        }
-        mac_with_separator
-    } else {
-        normalized
-    }
-}
-
 /// Send Wake-on-LAN magic packet
 pub async fn atx_wol(
     State(state): State<Arc<AppState>>,
     Json(req): Json<WolRequest>,
 ) -> Result<Json<LoginResponse>> {
-    let mac_address = normalize_wol_mac_address(&req.mac_address);
-
-    // Get WOL interface from config
     let config = state.config.get();
+
+    if !config.atx.wol_enabled {
+        return Err(AppError::BadRequest(
+            "Wake-on-LAN is disabled in settings".to_string(),
+        ));
+    }
+
+    let mac_address = crate::atx::normalize_mac_address(&req.mac_address).map_err(|_| {
+        AppError::BadRequest(format!("Invalid MAC address: {}", req.mac_address.trim()))
+    })?;
+
     let interface = if config.atx.wol_interface.is_empty() {
         None
     } else {

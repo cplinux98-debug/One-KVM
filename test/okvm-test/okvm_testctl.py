@@ -1855,7 +1855,15 @@ echo "$BACKUP"
         try:
             status = self.api.get("/atx/status")
             config = self.api.get("/config/atx")
-            wol = self.api.post("/atx/wol", {"mac_address": self.args.wol_mac})
+            # WOL is gated behind its own switch, so enable it before sending.
+            wol_was_enabled = bool(config.get("wol_enabled")) if isinstance(config, dict) else False
+            if not wol_was_enabled:
+                config = self.api.patch("/config/atx", {"wol_enabled": True})
+            try:
+                wol = self.api.post("/atx/wol", {"mac_address": self.args.wol_mac})
+            finally:
+                if not wol_was_enabled:
+                    self.api.patch("/config/atx", {"wol_enabled": False})
             self.reporter.add("atx_api", "PASS", "ATX status/config/WOL APIs responded", status=status, config=config, wol=wol)
         except Exception as exc:
             self.reporter.add("atx_api", "FAIL", str(exc))

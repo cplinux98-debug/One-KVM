@@ -597,8 +597,12 @@ pub struct AtxConfigUpdate {
     pub led: Option<AtxInputBindingUpdate>,
     /// HDD activity sensing configuration
     pub hdd: Option<AtxInputBindingUpdate>,
+    /// Whether Wake-on-LAN is offered to console clients
+    pub wol_enabled: Option<bool>,
     /// Network interface for WOL packets (empty = auto)
     pub wol_interface: Option<String>,
+    /// Full replacement list of named WOL targets (max 5 entries)
+    pub wol_targets: Option<Vec<WolTarget>>,
 }
 
 impl AtxConfigUpdate {
@@ -623,6 +627,48 @@ impl AtxConfigUpdate {
         for (name, binding) in [("led", self.led.as_ref()), ("hdd", self.hdd.as_ref())] {
             if let Some(binding) = binding {
                 Self::validate_input_binding_update(binding, name)?;
+            }
+        }
+
+        if let Some(ref targets) = self.wol_targets {
+            Self::validate_wol_targets(targets)?;
+        }
+
+        Ok(())
+    }
+
+    fn validate_wol_targets(targets: &[WolTarget]) -> crate::error::Result<()> {
+        if targets.len() > WOL_TARGET_MAX_COUNT {
+            return Err(AppError::BadRequest(format!(
+                "At most {} WOL targets can be saved",
+                WOL_TARGET_MAX_COUNT
+            )));
+        }
+
+        let mut seen: Vec<String> = Vec::with_capacity(targets.len());
+        for target in targets {
+            // Blank rows are dropped by normalization, so skip them here.
+            if target.mac.trim().is_empty() {
+                continue;
+            }
+
+            let mac = crate::atx::normalize_mac_address(&target.mac).map_err(|_| {
+                AppError::BadRequest(format!("Invalid WOL MAC address: {}", target.mac.trim()))
+            })?;
+
+            if seen.contains(&mac) {
+                return Err(AppError::BadRequest(format!(
+                    "Duplicate WOL MAC address: {}",
+                    mac
+                )));
+            }
+            seen.push(mac);
+
+            if target.name.trim().chars().count() > WOL_TARGET_NAME_MAX_CHARS {
+                return Err(AppError::BadRequest(format!(
+                    "WOL target name must be at most {} characters",
+                    WOL_TARGET_NAME_MAX_CHARS
+                )));
             }
         }
 
@@ -801,8 +847,15 @@ impl AtxConfigUpdate {
         if let Some(ref hdd) = self.hdd {
             Self::apply_input_binding_update(hdd, &mut config.hdd);
         }
+        if let Some(wol_enabled) = self.wol_enabled {
+            config.wol_enabled = wol_enabled;
+        }
         if let Some(ref wol_interface) = self.wol_interface {
             config.wol_interface = wol_interface.clone();
+        }
+        if let Some(ref wol_targets) = self.wol_targets {
+            config.wol_targets = wol_targets.clone();
+            config.normalize_wol_targets();
         }
     }
 
@@ -1363,8 +1416,84 @@ mod tests {
             reset: None,
             led: None,
             hdd: None,
+            wol_enabled: None,
             wol_interface: None,
+            wol_targets: None,
         }
+    }
+
+    #[test]
+    fn test_atx_apply_update_normalizes_wol_targets() {
+        let mut config = AtxConfig::default();
+        let mut update = empty_atx_update();
+        update.wol_enabled = Some(true);
+        update.wol_targets = Some(vec![
+            WolTarget {
+                name: "  NAS  ".to_string(),
+                mac: "aa-bb-cc-dd-ee-ff".to_string(),
+            },
+            WolTarget {
+                name: "blank".to_string(),
+                mac: "   ".to_string(),
+            },
+        ]);
+
+        update.apply_to(&mut config);
+
+        assert!(config.wol_enabled);
+        assert_eq!(config.wol_targets.len(), 1);
+        assert_eq!(config.wol_targets[0].name, "NAS");
+        assert_eq!(config.wol_targets[0].mac, "AA:BB:CC:DD:EE:FF");
+    }
+
+    #[test]
+    fn test_atx_validate_rejects_invalid_and_duplicate_wol_targets() {
+        let mut update = empty_atx_update();
+        update.wol_targets = Some(vec![WolTarget {
+            name: "bad".to_string(),
+            mac: "not-a-mac".to_string(),
+        }]);
+        assert!(update.validate().is_err());
+
+        let mut update = empty_atx_update();
+        update.wol_targets = Some(vec![
+            WolTarget {
+                name: "a".to_string(),
+                mac: "AA:BB:CC:DD:EE:FF".to_string(),
+            },
+            WolTarget {
+                name: "b".to_string(),
+                mac: "aabbccddeeff".to_string(),
+            },
+        ]);
+        assert!(update.validate().is_err());
+    }
+
+    #[test]
+    fn test_atx_validate_rejects_too_many_wol_targets() {
+        let mut update = empty_atx_update();
+        update.wol_targets = Some(
+            (0..=WOL_TARGET_MAX_COUNT)
+                .map(|index| WolTarget {
+                    name: format!("host{}", index),
+                    mac: format!("AA:BB:CC:DD:EE:{:02X}", index),
+                })
+                .collect(),
+        );
+        assert!(update.validate().is_err());
+    }
+
+    #[test]
+    fn test_atx_power_controls_available_tracks_either_feature() {
+        let mut config = AtxConfig::default();
+        assert!(!config.power_controls_available());
+
+        config.wol_enabled = true;
+        assert!(config.power_controls_available());
+
+        config.wol_enabled = false;
+        config.enabled = true;
+        assert!(config.power_controls_available());
     }
 
     #[test]

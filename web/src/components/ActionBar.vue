@@ -59,7 +59,12 @@ const isCh9329Backend = computed(() => hidBackend.value.includes('ch9329'))
 const showMsd = computed(() => {
   return !!systemStore.msd?.available && !isCh9329Backend.value
 })
-const showAtx = computed(() => systemStore.atx?.available === true)
+// ATX hardware control and Wake-on-LAN are independent features; the power
+// button stays available as long as at least one of them is enabled.
+const atxAvailable = computed(() => systemStore.atx?.available === true)
+const wolEnabled = computed(() => systemStore.atx?.wolEnabled === true)
+const wolTargets = computed(() => systemStore.atx?.wolTargets ?? [])
+const showAtx = computed(() => systemStore.atx?.powerControlsAvailable === true)
 
 const props = defineProps<{
   mouseMode?: 'absolute' | 'relative'
@@ -356,6 +361,9 @@ const hasRightOverflow = computed(() => {
             </PopoverTrigger>
             <PopoverContent class="w-[min(280px,90vw)] p-0" align="start">
               <AtxPopover
+                :atx-available="atxAvailable"
+                :wol-enabled="wolEnabled"
+                :wol-targets="wolTargets"
                 @close="atxOpen = false"
                 @power-short="emit('powerShort')"
                 @power-long="emit('powerLong')"
@@ -542,6 +550,9 @@ const hasRightOverflow = computed(() => {
         <SheetTitle>{{ t('actionbar.power') }}</SheetTitle>
       </SheetHeader>
       <AtxPopover
+        :atx-available="atxAvailable"
+        :wol-enabled="wolEnabled"
+        :wol-targets="wolTargets"
         @close="mobileAtxOpen = false"
         @power-short="emit('powerShort')"
         @power-long="emit('powerLong')"

@@ -304,29 +304,51 @@ impl AppState {
         }
     }
 
+    /// Collect ATX/WOL info for the `device_info` event.
+    ///
+    /// Always reports, even without an ATX controller, because Wake-on-LAN is
+    /// configured independently and the console still needs its power button.
     async fn collect_atx_info(&self) -> Option<AtxDeviceInfo> {
         let atx_guard = self.atx.read().await;
-        let atx = atx_guard.as_ref()?;
+        let state = match atx_guard.as_ref() {
+            Some(atx) => Some(atx.state().await),
+            None => None,
+        };
+        drop(atx_guard);
 
-        let state = atx.state().await;
+        let config = self.config.get();
+        let wol_enabled = config.atx.wol_enabled;
+        let available = state.as_ref().is_some_and(|state| state.available);
+
         Some(AtxDeviceInfo {
-            available: state.available,
-            backend: match state.driver {
-                crate::atx::AtxDriverType::Gpio => "gpio",
-                crate::atx::AtxDriverType::UsbRelay => "usbrelay",
-                crate::atx::AtxDriverType::Serial => "serial",
-                crate::atx::AtxDriverType::None => "none",
+            available,
+            backend: match state.as_ref().map(|state| state.driver) {
+                Some(crate::atx::AtxDriverType::Gpio) => "gpio",
+                Some(crate::atx::AtxDriverType::UsbRelay) => "usbrelay",
+                Some(crate::atx::AtxDriverType::Serial) => "serial",
+                Some(crate::atx::AtxDriverType::None) | None => "none",
             }
             .to_string(),
-            initialized: state.power_configured || state.reset_configured,
-            power_on: state.power_status == crate::atx::PowerStatus::On,
-            hdd_status: match state.hdd_status {
-                crate::atx::HddStatus::Active => "active",
-                crate::atx::HddStatus::Inactive => "inactive",
-                crate::atx::HddStatus::Unknown => "unknown",
+            initialized: state
+                .as_ref()
+                .is_some_and(|state| state.power_configured || state.reset_configured),
+            power_on: state
+                .as_ref()
+                .is_some_and(|state| state.power_status == crate::atx::PowerStatus::On),
+            hdd_status: match state.as_ref().map(|state| state.hdd_status) {
+                Some(crate::atx::HddStatus::Active) => "active",
+                Some(crate::atx::HddStatus::Inactive) => "inactive",
+                Some(crate::atx::HddStatus::Unknown) | None => "unknown",
             }
             .to_string(),
             error: None,
+            wol_enabled,
+            wol_targets: if wol_enabled {
+                config.atx.wol_targets.clone()
+            } else {
+                Vec::new()
+            },
+            power_controls_available: available || config.atx.power_controls_available(),
         })
     }
 
