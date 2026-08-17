@@ -9,6 +9,14 @@ FROM debian:11-slim
 
 ARG TARGETPLATFORM
 
+# QEMU may crash while Debian's libc-bin package runs ldconfig during an
+# ARM64 cross-platform build. Temporarily replace it with a no-op; init.sh
+# refreshes the linker cache natively when the container starts.
+RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
+        mv /sbin/ldconfig /sbin/ldconfig.real && \
+        ln -s /bin/true /sbin/ldconfig; \
+    fi
+
 # Install runtime dependencies in a single layer
 # All codec libraries (libx264, libx265, libopus) are now statically linked
 # Only hardware acceleration drivers and core system libraries remain dynamic
@@ -37,6 +45,9 @@ RUN sed -i 's/ main$/ main contrib non-free/' /etc/apt/sources.list && \
     elif [ "$TARGETPLATFORM" = "linux/arm/v7" ]; then \
         apt-get install -y --no-install-recommends \
             libdrm2 libva2; \
+    fi && \
+    if [ -e /sbin/ldconfig.real ]; then \
+        rm /sbin/ldconfig && mv /sbin/ldconfig.real /sbin/ldconfig; \
     fi && \
     rm -rf /var/lib/apt/lists/* && \
     mkdir -p /etc/one-kvm/ventoy

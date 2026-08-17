@@ -2,6 +2,13 @@
 # One-KVM initialization script
 # Container entrypoint to start the one-kvm service
 
+# Refresh the dynamic linker cache on the native host architecture. During
+# ARM64 cross-platform image builds ldconfig is temporarily skipped because
+# some QEMU versions crash in Debian 11's libc-bin post-install trigger.
+if command -v ldconfig >/dev/null 2>&1; then
+    ldconfig || echo "[WARN] Failed to refresh dynamic linker cache"
+fi
+
 set -e
 
 detect_intel_libva_driver() {

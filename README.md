@@ -28,10 +28,10 @@ docker run --name one-kvm -itd \
 
 | 标签 | 说明 |
 | --- | --- |
-| `cplinux98/one-kvm:latest` | 最新构建 |
-| `cplinux98/one-kvm:v0.2.6-wol` | 基于上游 v0.2.6，含本仓库的 WOL 修改 |
+| `cplinux98/one-kvm:latest` | 最新多架构构建（amd64 / arm64，Docker 自动选择） |
+| `cplinux98/one-kvm:v0.2.6-wol` | 基于上游 v0.2.6，含本仓库的 WOL 修改（amd64 / arm64） |
 
-仅提供 `linux/amd64` 架构。ARM 设备（树莓派、派星等）请使用原项目的官方镜像。
+提供 `linux/amd64` 与 `linux/arm64` 两种架构；使用同一个标签即可，Docker 会按设备架构自动拉取。ARM64 设备的 `uname -m` 通常显示为 `aarch64`。
 
 ### 持久化配置
 
@@ -70,6 +70,11 @@ docker run --name one-kvm -itd \
 
 ### 修改日志
 
+#### 2026-08-17 — 新增 ARM64 Docker 镜像
+
+- 新增 `linux/arm64`（`aarch64`）二进制与运行时镜像，并与现有 `linux/amd64` 组合为多架构 `latest`、`v0.2.6-wol` 标签。
+- 修复在 x86_64 主机上通过 QEMU 打包 Debian 11 ARM64 镜像时，`libc-bin` 的 `ldconfig` post-install trigger 发生段错误的问题：跨架构构建阶段临时跳过 `ldconfig`，容器在真实目标设备启动时原生刷新动态链接器缓存。
+- ARM64 镜像已通过 QEMU 启动验证，HTTP 服务返回 200。
 #### 2026-08-07 — 网络唤醒独立开关与具名 WOL 目标
 
 提交 [`54aa5f3`](https://github.com/cplinux98-debug/One-KVM/commit/54aa5f3)，共 19 个文件，+560 / −147。
